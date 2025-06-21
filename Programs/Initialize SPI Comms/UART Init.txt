@@ -1,0 +1,73 @@
+#include "intrinsics.h"
+#include <msp430.h>
+#include <stdint.h>
+
+// Initialize UART (assumes UCA0, SMCLK = 1MHz, 9600 baud)
+void uart_init(void) {
+    UCA0CTL1 |= UCSWRST;
+    UCA0CTL1 |= UCSSEL_2;
+
+    UCA0BR0 = 104;
+    UCA0BR1 = 0;
+    UCA0MCTL = UCBRS_1;
+
+    P3SEL |= BIT3;
+    P3DIR |= BIT3;
+
+    UCA0CTL1 &= ~UCSWRST;
+}
+
+// Send one character
+void uart_send_byte(unsigned char byte) {
+    while (!(UCA0IFG & UCTXIFG));
+    UCA0TXBUF = byte;
+}
+
+// Send null-terminated string
+void uart_send_string(const char* str) {
+    while (*str) {
+        uart_send_byte(*str++);
+    }
+}
+
+// Convert uint16_t to ASCII and send to t0.txt
+void send_adc_to_nextion(uint16_t adc_value) {
+    char buffer[8]; // Enough for "65535" + null
+    int i = 0;
+
+    // Convert integer to ASCII (manual to avoid stdlib)
+    if (adc_value == 0) {
+        buffer[i++] = '0';
+    } else {
+        uint16_t temp = adc_value;
+        char rev[6];
+        int j = 0;
+        while (temp > 0) {
+            rev[j++] = '0' + (temp % 10);
+            temp /= 10;
+        }
+        while (j > 0) {
+            buffer[i++] = rev[--j];
+        }
+    }
+    buffer[i] = '\0';
+
+    uart_send_string("t0.txt=\"");
+    uart_send_string(buffer);
+    uart_send_byte('"');
+    uart_send_byte(0xFF);
+    uart_send_byte(0xFF);
+    uart_send_byte(0xFF);
+}
+
+// Demo main
+int main(void) {
+    WDTCTL = WDTPW | WDTHOLD;
+
+    uart_init();
+    _delay_cycles(100000);
+    uint16_t adc_value = 7552;  // Simulated ADC value
+    send_adc_to_nextion(adc_value);
+
+    while (1);
+}

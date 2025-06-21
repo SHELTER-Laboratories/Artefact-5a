@@ -1,0 +1,268 @@
+#include "ref.h"
+#include <msp430.h>
+#include <driverlib.h>
+#include <stdint.h>
+#include "sd.h"
+
+#define NUM_SAMPLES 16      // Number of ADC samples to average
+
+volatile unsigned int adc_result = 0;  // Stores the averaged ADC value
+volatile unsigned char trigger = 0;    // Software trigger flag
+volatile unsigned int i = 0;
+volatile unsigned int timestamp = 0;
+unsigned long sum = 0;
+unsigned int DataProcessed;
+void configureADC();
+void startConversion();
+
+volatile uint32_t lba = 2048;  // or 0 depending on your card layout
+volatile uint8_t buffer[512];
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+//                                                                           //
+//                         MAIN FUNCTION                                     //
+//                                                                           //
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+int main(void) {
+    WDTCTL = WDTPW | WDTHOLD;  // Stop watchdog timer
+    TA0CTL = TASSEL_2 | MC_2 | TACLR;  // SMCLK source, Continuous mode, Clear timer
+    // Unlock the CS registers
+    CSCTL0_H = CSKEY >> 8;
+
+    // Set the DCO frequency to 1 MHz (DCOFSEL_0 for 1 MHz)
+    CSCTL1 = DCOFSEL_0; // 1 MHz
+
+    // Select the DCO as the source for both MCLK and SMCLK
+    CSCTL2 = SELM_0 | SELS_0; // MCLK and SMCLK = DCO
+
+    // Lock the CS registers after configuration
+    CSCTL0_H = 0;
+
+    // Optional: Enable global interrupts if needed
+    __bis_SR_register(GIE);
+    // Configure ADC and Trigger (Assume Button on P1.1 for manual trigger)
+    configureADC();
+    P1DIR &= ~BIT1;            // P1.1 as input (Button)
+    P1REN |= BIT1;             // Enable pull-up/down resistor
+    P1OUT |= BIT1;             // Set pull-up resistor
+    P1IE |= BIT1;              // Enable interrupt for P1.1
+    P1IES |= BIT1;             // Trigger on falling edge
+    P1IFG &= ~BIT1;            // Clear interrupt flag
+    __enable_interrupt();      // Enable global interrupts
+    spi_init();
+    uint8_t init_status = sd_initialize();
+    if (init_status == 0) {
+        // Initialization successful
+        sd_read_sector(lba, buffer);  // Read sector after initialization
+    } else {
+        // Initialization failed, handle error
+        while (1);  // Stay here or blink an LED to indicate failure
+    }
+
+
+    while (1) {
+        if (trigger) {
+            trigger = 0;  // Reset trigger flag
+            i = 0;
+            startConversion();
+        }
+
+    }
+}
+///////////////////////////////////////////////////////////////////////////////
+//                             END OF MAIN                                   //
+///////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////
+//                     SPI-MCU Initialization                                //
+///////////////////////////////////////////////////////////////////////////////
+void spi_init(void) {
+    // Set the MSP430 pins for SCK, MOSI, MISO, and CS (chip select) if needed
+    // Set SPI pin functions
+    P2SEL |= BIT6;    // SCK
+    P3SEL |= BIT0;    // MOSI
+    P3SEL |= BIT1;    // MISO
+
+    // Set directions (only for output pins)
+    P2DIR |= BIT6;    // SCK as output
+    P3DIR |= BIT0;    // MOSI as output
+    P3DIR &= ~BIT1;   // MISO as input
+    P2DIR |= BIT0;  // Set CS (P2.0) as output
+
+    // Configure USCI_B0 for SPI
+    UCB0CTL1 = UCSWRST;          // Put USCI in reset
+    UCB0CTL0 = UCCKPL | UCMSB | UCMST | UCSYNC; // 3-pin, 8-bit SPI master
+    
+    // Clock source: SMCLK
+    UCB0CTL1 |= UCSSEL_2;
+    
+    UCB0BR0 = 2;                 // Set baud rate (SMCLK / 2)
+    UCB0BR1 = 0;
+    UCB0CTL1 &= ~UCSWRST;        // Release USCI from reset
+    unsigned int smclk_source = UCSCTL4 & SELS_3;  // Check source for SMCLK
+spi_transfer(0xFF);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                      MicroSD Initialization Protocol                      //
+///////////////////////////////////////////////////////////////////////////////
+uint8_t sd_initialize(void) {
+    uint8_t response;
+
+    // Reset the card with CMD0
+    response = sd_send_cmd(0, 0);
+    if (response != 0x01) {  // 0x01 means card is in IDLE state
+        return 1;  // Error
+    }
+
+    // Check SD card version with CMD8
+    response = sd_send_cmd(8, 0x1AA);  // SDHC/SDXC voltage check
+    if (response == 0x05) {
+        // Valid SDHC/SDXC card, proceed with CMD58 to read OCR
+        response = sd_send_cmd(58, 0);  // Read OCR register
+        if (response != 0x00) {
+            return 1;  // Error reading OCR
+        }
+    } else {
+        // Older card, proceed with initialization
+    }
+
+    // Start card initialization with CMD55 and ACMD41 in a loop
+    do {
+        response = sd_send_cmd(55, 0);  // CMD55 to prepare for ACMD41
+        if (response != 0x01) {  // Expecting 0x01 (IDLE state)
+            return 1;  // Error
+        }
+        response = sd_send_cmd(41, 0x40000000);  // ACMD41 to initialize the card
+    } while (response != 0x00);  // Wait for the card to become ready
+
+    // The SD card is now initialized and ready for communication
+    return 0;  // Success
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                          SPI-MCU Data Transfer Funct                      //
+///////////////////////////////////////////////////////////////////////////////
+uint8_t spi_transfer(uint8_t data) {
+    // SPI transfer code
+    UCB0TXBUF = data;  // Send data
+    while (!(UCB0IFG & UCTXIFG));  // Wait until TX buffer is ready
+    return UCB0RXBUF;  // Return received byte
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                       MicroSD Send Function                               //
+///////////////////////////////////////////////////////////////////////////////
+uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg) {
+    uint8_t response;
+
+    // Send the command and argument to the SD card
+    spi_transfer(cmd);              // Send the command byte
+    spi_transfer((uint8_t)(arg >> 24)); // Send the argument byte 1
+    spi_transfer((uint8_t)(arg >> 16)); // Send the argument byte 2
+    spi_transfer((uint8_t)(arg >> 8));  // Send the argument byte 3
+    spi_transfer((uint8_t)(arg));       // Send the argument byte 4
+
+    // Read the response byte from the SD card
+    response = spi_transfer(0xFF);  // Send 0xFF and read the response byte
+
+    return response;  // Return the SD card's response byte
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                           MicroSD Read Meta Data                          //
+///////////////////////////////////////////////////////////////////////////////
+uint8_t sd_read_sector(uint32_t lba, uint8_t *buffer) {
+    if (sd_send_cmd(17, lba * 512) != 0x00) 
+    return 1;
+
+    while (spi_transfer(0xFF) != 0xFE) {
+        // Waiting for data token (0xFE)
+    }
+
+    int k = 0;
+    while (k < 512) {
+    buffer[k] = spi_transfer(0xFF);
+    k++;
+    }
+    spi_transfer(0xFF); // Ignore CRC
+    spi_transfer(0xFF);
+
+    return 0;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                      MicroSD Metadata Processing                          //
+///////////////////////////////////////////////////////////////////////////////
+void extract_fat32_metadata(void) {
+    uint16_t bytes_per_sector = buffer[11] | (buffer[12] << 8);
+    uint8_t sectors_per_cluster = buffer[13];
+    uint16_t reserved_sectors = buffer[14] | (buffer[15] << 8);
+    uint8_t num_fats = buffer[16];
+    uint32_t fat_size = buffer[36] | (buffer[37] << 8) | (buffer[38] << 16) | (buffer[39] << 24);
+    uint32_t root_cluster = buffer[44] | (buffer[45] << 8) | (buffer[46] << 16) | (buffer[47] << 24);
+
+    // Debug output
+    __no_operation(); // Set a breakpoint here to inspect values
+
+    // Optionally, send the extracted metadata over UART for debugging
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                  Configure ADC for single-channel conversion              //
+///////////////////////////////////////////////////////////////////////////////
+void configureADC() {
+    ADC12CTL0 = ADC12SHT0_4 | ADC12ON;                  // Sample-and-hold time, turn ADC on
+    ADC12CTL1 = ADC12SHP;                               // Use sampling timer.
+    ADC12CTL2 = ADC12RES_2;                             //Ensures 12-bit resolution (default might be lower).
+    ADC12MCTL0 = ADC12INCH_1 | REF_VREF2_5V;            // Channel A0, VR+ = 2.5V
+    ADC12IE = ADC12IE0;                                 // Enable ADC interrupt
+    REFCTL0 = REFON | REFVSEL_2;                            // Turn on 2.5V reference
+    __delay_cycles(1000);                               // Allow time for reference to settle
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                       Start ADC sampling and averaging                    //
+///////////////////////////////////////////////////////////////////////////////
+void startConversion() {
+
+    for (i = 0; i < NUM_SAMPLES; i++) {
+        ADC12CTL0 |= ADC12ENC | ADC12SC;   // Start conversion
+        DataProcessed = 0;
+        while (!(DataProcessed));   // Wait for conversion to complete
+    }
+
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                Button Interrupt: Set trigger flag when pressed            //
+///////////////////////////////////////////////////////////////////////////////
+#pragma vector=PORT1_VECTOR
+__interrupt void Port_1(void) {
+    trigger = 1;             // Set trigger flag
+    P1IFG &= ~BIT1;          // Clear interrupt flag
+    __bic_SR_register_on_exit(CPUOFF);  // Clear the CPUOFF bit to wake up the CPU
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                      MCU-ADC Interrupt: Switch CMD                        //
+///////////////////////////////////////////////////////////////////////////////
+#pragma vector=ADC12_VECTOR
+__interrupt void ADC12_ISR(void) {
+    switch (__even_in_range(ADC12IV, 34)) {
+        case  0: break;        // No interrupt
+        case  2: break;        // ADC12MEMx overflow
+        case  4: break;        // ADC12 conversion time overflow
+        case  6:               // ADC12MEM0 interrupt
+                sum += ADC12MEM0;                  // Read ADC value
+                P1OUT ^= BIT0;     // Toggle LED on P1.0 as an example
+                ADC12IFG &= ~ADC12IFG0; // Clear interrupt flag
+                DataProcessed = 1;
+                timestamp = TA0R;
+                break;
+        default: break;
+    }
+}
+

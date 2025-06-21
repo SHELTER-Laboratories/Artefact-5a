@@ -1,0 +1,90 @@
+#include <msp430f5529.h>
+#include <stdint.h>
+
+// Main
+int main(void) {
+    WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer
+
+    // Set SPI pin functions
+    P3SEL |= BIT2;    // SCK
+    P3SEL |= BIT0;    // MOSI
+    P3SEL |= BIT1;    // MISO
+
+    // Set directions (only for output pins)
+    P3DIR |= BIT2;    // SCK as output
+    P3DIR |= BIT0;    // MOSI as output
+    P3DIR &= ~BIT1;   // MISO as input
+    P2DIR |= BIT0;  // Set CS (P2.0) as output
+
+    // Configure USCI_B0 for SPI
+    UCB0CTL1 |= UCSWRST;                     // Hold in reset
+    UCB0CTL0 = UCCKPH | UCMSB | UCMST | UCSYNC; // SPI, 3-pin, master, sync
+    UCB0CTL1 |= UCSSEL_2;                    // SMCLK
+    UCB0BR0 = 2;                             // Clock divider
+    UCB0BR1 = 0;
+    UCB0CTL1 &= ~UCSWRST;                    // Release from reset
+
+    // Send 80 clock cycles with CS high (10 x 0xFF)
+    P2OUT |= BIT0; // CS high
+    volatile uint8_t dummy_count = 0;
+    while (dummy_count < 10) {
+        while (!(UCB0IFG & UCTXIFG));
+        UCB0TXBUF = 0xFF;
+        while (!(UCB0IFG & UCRXIFG));
+        volatile uint8_t throwaway = UCB0RXBUF;
+        dummy_count++;
+    }
+
+    // CS low
+    P2OUT &= ~BIT0;
+
+    // CMD0: Go idle
+    while (!(UCB0IFG & UCTXIFG));
+    UCB0TXBUF = 0x40 | 0; // CMD0
+    while (!(UCB0IFG & UCRXIFG));
+    volatile uint8_t resp = UCB0RXBUF;
+
+    while (!(UCB0IFG & UCTXIFG));
+    UCB0TXBUF = 0x00; // Arg byte 1
+    while (!(UCB0IFG & UCRXIFG));
+    UCB0RXBUF;
+
+    while (!(UCB0IFG & UCTXIFG));
+    UCB0TXBUF = 0x00; // Arg byte 2
+    while (!(UCB0IFG & UCRXIFG));
+    UCB0RXBUF;
+
+    while (!(UCB0IFG & UCTXIFG));
+    UCB0TXBUF = 0x00; // Arg byte 3
+    while (!(UCB0IFG & UCRXIFG));
+    UCB0RXBUF;
+
+    while (!(UCB0IFG & UCTXIFG));
+    UCB0TXBUF = 0x00; // Arg byte 4
+    while (!(UCB0IFG & UCRXIFG));
+    UCB0RXBUF;
+
+    while (!(UCB0IFG & UCTXIFG));
+    UCB0TXBUF = 0x95; // Valid CRC for CMD0
+    while (!(UCB0IFG & UCRXIFG));
+    UCB0RXBUF;
+
+    // Wait for response (R1 should be 0x01 for idle)
+    volatile uint8_t r1 = 0xFF;
+    volatile uint8_t tries = 0;
+    while ((r1 & 0x80) && tries < 8) {
+        while (!(UCB0IFG & UCTXIFG));
+        UCB0TXBUF = 0xFF;
+        while (!(UCB0IFG & UCRXIFG));
+        r1 = UCB0RXBUF;
+        tries++;
+    }
+
+    // CS high
+    P2OUT |= BIT0;
+
+    // Halt here, inspect "r1" in debugger to confirm response
+    __no_operation();
+
+    while (1);
+}

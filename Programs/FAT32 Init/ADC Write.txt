@@ -1,0 +1,15 @@
+FIL file;        // File object
+UINT bw;         // Bytes written
+
+void writeADCData(uint16_t adcValue) {
+    char buffer[16];
+    sprintf(buffer, "%d\n", adcValue);       // Convert ADC value to string
+
+    if (f_open(&file, "adc_data.txt", FA_WRITE | FA_OPEN_APPEND) == FR_OK) {
+        f_write(&file, buffer, strlen(buffer), &bw);  // Write data to file
+        f_close(&file);                               // Close the file
+    } else {
+        // Handle file open error
+        while (1);
+    }
+}

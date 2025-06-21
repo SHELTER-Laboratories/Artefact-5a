@@ -1,0 +1,12 @@
+void initADC() {
+    ADC12CTL0 = ADC12SHT0_2 | ADC12ON;        // Sampling time, ADC on
+    ADC12CTL1 = ADC12SHP;                     // Use sampling timer
+    ADC12MCTL0 = ADC12INCH_0;                 // ADC input channel A0
+    ADC12CTL0 |= ADC12ENC;                    // Enable conversions
+}
+
+uint16_t readADC() {
+    ADC12CTL0 |= ADC12SC;                     // Start sampling/conversion
+    while (!(ADC12IFG & ADC12IFG0));          // Wait for conversion to complete
+    return ADC12MEM0;                         // Return ADC value
+}

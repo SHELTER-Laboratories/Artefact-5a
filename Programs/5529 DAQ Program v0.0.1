@@ -1,0 +1,62 @@
+#include <msp430.h>
+
+#define NUM_SAMPLES 16      // Number of ADC samples to average
+#define ADC_INPUT_PIN BIT0  // Assume using P6.0 (A0)
+
+volatile unsigned int adc_result = 0;  // Stores the averaged ADC value
+volatile unsigned char trigger = 0;    // Software trigger flag
+
+void configureADC();
+void startConversion();
+
+int main(void) {
+    WDTCTL = WDTPW | WDTHOLD;  // Stop watchdog timer
+
+    // Configure ADC and Trigger (Assume Button on P1.1 for manual trigger)
+    configureADC();
+    P1DIR &= ~BIT1;            // P1.1 as input (Button)
+    P1REN |= BIT1;             // Enable pull-up/down resistor
+    P1OUT |= BIT1;             // Set pull-up resistor
+    P1IE |= BIT1;              // Enable interrupt for P1.1
+    P1IES |= BIT1;             // Trigger on falling edge
+    P1IFG &= ~BIT1;            // Clear interrupt flag
+
+    __enable_interrupt();       // Enable global interrupts
+
+    while (1) {
+        if (trigger) {
+            trigger = 0;  // Reset trigger flag
+            startConversion();
+        }
+    }
+}
+
+// Configure ADC for single-channel conversion
+void configureADC() {
+    ADC12CTL0 = ADC12SHT0_2 | ADC12ON;   // Sample-and-hold time, turn ADC on
+    ADC12CTL1 = ADC12SHP;                // Use sampling timer
+    ADC12MCTL0 = ADC_INPUT_PIN;          // Select A0 (P6.0) as input
+    ADC12IE = ADC12IE0;                  // Enable ADC interrupt
+}
+
+// Start ADC sampling and averaging
+void startConversion() {
+    unsigned long sum = 0;
+
+    for (int i = 0; i < NUM_SAMPLES; i++) {
+        ADC12CTL0 |= ADC12ENC | ADC12SC;   // Start conversion
+        while (!(ADC12IFG & ADC12IFG0));   // Wait for conversion to complete
+        sum += ADC12MEM0;                  // Read ADC value
+    }
+
+    adc_result = sum / NUM_SAMPLES;  // Compute average
+
+    // Now adc_result can be inspected in the debugger
+}
+
+// Button Interrupt: Set trigger flag when pressed
+#pragma vector=PORT1_VECTOR
+__interrupt void Port_1(void) {
+    trigger = 1;             // Set trigger flag
+    P1IFG &= ~BIT1;          // Clear interrupt flag
+}

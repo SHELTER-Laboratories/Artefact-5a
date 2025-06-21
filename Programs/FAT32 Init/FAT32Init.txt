@@ -1,0 +1,10 @@
+#include "ff.h"  // Include FatFs headers
+
+FATFS fs;        // File system object
+
+void mountSD() {
+    if (f_mount(&fs, "", 1) != FR_OK) {
+        // Handle mounting error
+        while (1);
+    }
+}

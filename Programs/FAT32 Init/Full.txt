@@ -1,0 +1,81 @@
+#include <msp430.h>
+#include "ff.h"  // Include FatFs library headers
+#include <string.h>
+#include <stdio.h>
+
+// Global FatFs variables
+FATFS fs;         // File system object
+FIL file;         // File object
+UINT bw;          // Bytes written
+
+// Function Prototypes
+void initSPI();
+void initADC();
+uint16_t readADC();
+void mountSD();
+void writeADCData(uint16_t adcValue);
+
+// Initialize SPI for SD card communication
+void initSPI() {
+    UCB0CTL1 |= UCSWRST;                     // Put USCI in reset
+    UCB0CTL0 = UCMST | UCSYNC | UCCKPH | UCMSB; // SPI master, synchronous, MSB first
+    UCB0CTL1 = UCSSEL_2;                     // Use SMCLK
+    UCB0BR0 = 0x02;                          // Divide clock by 2 for slower SPI
+    UCB0BR1 = 0;
+    P3SEL |= BIT0 | BIT1 | BIT2;             // Set P3.0, P3.1, P3.2 for SPI
+    P2DIR |= BIT0;                           // Set P2.0 as CS (Chip Select)
+    P2OUT |= BIT0;                           // Deselect SD card (CS high)
+    UCB0CTL1 &= ~UCSWRST;                    // Release USCI from reset
+}
+
+// Initialize ADC for analog input sampling
+void initADC() {
+    ADC12CTL0 = ADC12SHT0_2 | ADC12ON;       // Sampling time, ADC on
+    ADC12CTL1 = ADC12SHP;                    // Use sampling timer
+    ADC12MCTL0 = ADC12INCH_0;                // ADC input channel A0
+    ADC12CTL0 |= ADC12ENC;                   // Enable ADC conversions
+}
+
+// Read a single sample from the ADC
+uint16_t readADC() {
+    ADC12CTL0 |= ADC12SC;                    // Start sampling/conversion	SETS BIT IN ADC12CTL0 SPECIFIC TO SAMPLING CONVERSION TO 1 BY BITWISE-OR THE SPECIFIED ARRAY ADC12SC
+    while (!(ADC12IFG & ADC12IFG0));         // Wait for conversion to complete	BLOCKS EXECUTION USING ! FOR CONVERSION COMPLETE BITS ADC12IFG and ADC12IFG0
+    return ADC12MEM0;                        // Return ADC value
+}
+
+// Mount the SD card and initialize the file system
+void mountSD() {
+    if (f_mount(&fs, "", 1) != FR_OK) {
+        // Handle mounting error
+        while (1);                           // Halt if the SD card cannot be mounted
+    }
+}
+
+// Write ADC data to a file on the SD card
+void writeADCData(uint16_t adcValue) {
+    char buffer[16];                         // Buffer to store the string
+    sprintf(buffer, "%d\n", adcValue);       // Convert ADC value to string
+
+    if (f_open(&file, "adc_data.txt", FA_WRITE | FA_OPEN_APPEND) == FR_OK) {
+        f_write(&file, buffer, strlen(buffer), &bw); // Write data to file
+        f_close(&file);                              // Close the file
+    } else {
+        // Handle file open/write error
+        while (1);                           // Halt if unable to write to file
+    }
+}
+
+// Main function
+int main(void) {
+    WDTCTL = WDTPW | WDTHOLD;                // Stop watchdog timer
+
+    initSPI();                               // Initialize SPI for SD card
+    initADC();                               // Initialize ADC
+    mountSD();                               // Mount the SD card
+
+    while (1) {
+        uint16_t adcValue = readADC();       // Capture ADC data
+        writeADCData(adcValue);              // Write ADC data to SD card
+        __delay_cycles(1000000);             // Delay for 1 second (adjust as needed)
+    }
+}

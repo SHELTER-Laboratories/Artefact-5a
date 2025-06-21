@@ -1,0 +1,13 @@
+int main(void) {
+    WDTCTL = WDTPW | WDTHOLD;                 // Stop watchdog timer
+
+    initSPI();                                // Initialize SPI for SD card
+    initADC();                                // Initialize ADC
+    mountSD();                                // Mount the SD card
+
+    while (1) {
+        uint16_t adcValue = readADC();        // Capture ADC data
+        writeADCData(adcValue);               // Write ADC data to SD card
+        __delay_cycles(1000000);              // Delay for next sample
+    }
+}
