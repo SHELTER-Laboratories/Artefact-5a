@@ -1,0 +1,20 @@
+cle 1,0		;clear data on ID:1 Channel:0
+spax 1,0,255;Set Y axis on ID:1 min:0 max:255
+add 1,0,25	;add datapoint to waveform, ID:1 Channel:0 Numerical:25; max Datapoints: 1024
+add 1,0,25	;" " " " "
+add 1,0,26	;" " " " "
+add 1,0,27	;" " " " "
+add 1,0,28	;" " " " "
+add 1,0,29	;" " " " "
+add 1,0,30	;" " " " "
+add 1,0,31	;" " " " "	
+add 1,0,32	;" " " " "
+add 1,0,33	;" " " " "
+add 1,0,34	;" " " " "
+add 1,0,35	;" " " " "
+add 1,0,100	;" " " " "
+add 1,0,106	;" " " " "
+add 1,0,110	;" " " " "
+add 1,0,125	;" " " " "
+add 1,0,160	;" " " " "
+add 1,0,255	;" " " " "
